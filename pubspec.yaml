@@ -1,0 +1,101 @@
+name: ciallo_reader
+description: "A new Flutter project."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.8
+  # 1. 网络请求 (对标 Kotlin 的 Retrofit/OkHttp)
+  dio: ^5.4.0
+
+  # 2. HTML 解析 (对标 Kotlin 的 Jsoup)
+  # 这是你从文库8抓取数据的核心工具
+  html: any
+  # 或者是 universal_html，兼容性更好，这里先用基础的 html 库
+
+  # 3. 状态管理 (管理数据流，这是 Flutter 的核心)
+  provider: ^6.1.1
+
+  # 4. 本地数据库 (对标 Kotlin 的 Room)
+  # 用来存小说文本和书架，Hive 比 SQLite 更轻更快
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # 5. 图片缓存 (对标 Kotlin 的 Glide)
+  cached_network_image: ^3.3.1
+
+  # 6. GBK 编码支持 (文库8是老网站，很可能需要这个)
+  fast_gbk: ^1.0.0
+
+  cookie_jar: ^4.0.8        # 用来在内存或手机里存 Cookie
+
+  dio_cookie_manager: ^3.1.1 # 让 Dio 自动携带 Cookie
+
+  path_provider: ^2.1.1
+
+  flutter_launcher_icons: ^0.13.1
+
+
+  page_flip: ^0.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  build_runner: ^2.4.6
+  hive_generator: ^2.0.1
+  # The "flutter_lints" package below contains a set of recommended lints to
+  # encourage good coding practices. The lint set provided by the package is
+  # activated in the `analysis_options.yaml` file located at the root of your
+  # package. See that file for information about deactivating specific lint
+  # rules and activating additional ones.
+  flutter_lints: ^6.0.0
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
+  uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/ciallo.png" # 你的图标路径
+  min_sdk_android: 21 # 选填
+  adaptive_icon_background: "#FFFFFF" # Android 自适应背景色（选填）
+  adaptive_icon_foreground: "assets/images/ciallo.png"
+
