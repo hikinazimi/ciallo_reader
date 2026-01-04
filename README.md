@@ -39,21 +39,3 @@
 
 
 
-## 🚀 快速开始 (Getting Started)
-
-
-
-📂 项目结构
-ciallo_reader/
-├── lib/
-│   ├── api/          # 网络请求层 (WenkuApi)
-│   ├── models/       # 数据模型 (Novel, Chapter, etc.)
-│   ├── pages/        # 页面 UI (HomePage, SearchPage...)
-│   ├── utils/        # 工具类 (Parser 解析器)
-│   └── widgets/      # 通用组件 (WenkuImage...)
-└── ...
-🤝 贡献 (Contribution)
-欢迎提交 Issue 和 Pull Request！如果你有好的想法或发现了 Bug，请随时告诉我。
-
-📄 许可证 (License)
-本项目遵循 MIT 许可证。
