@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:page_flip/page_flip.dart';
+
+// 引入你的本地 PageFlip 库
+import '../widgets/page_flip/page_flip.dart';
+
 import '../models/chapter.dart';
 import '../api/wenku_api.dart';
 import '../utils/bookshelf_manager.dart';
@@ -25,16 +29,22 @@ class ReaderPage extends StatefulWidget {
 class _ReaderPageState extends State<ReaderPage> {
   String _fullContent = "";
   List<String> _pages = [];
-  bool _isLoading = true;
-  bool _isPaging = false;
+  bool _isLoading = true; // 加载网络内容中
+  bool _isPaging = false; // 计算排版中
 
   Key _pageFlipKey = UniqueKey();
-
-  // 🔥 新增：记录当前页码
   int _currentIndex = 0;
 
+  // 缓存上次的配置，避免重复计算
   double? _lastFontSize;
   bool? _lastUseTwoColumns;
+  Size? _lastSize;
+
+  // 布局常量
+  final double _displayPaddingVertical = 40.0;
+  final double _displayPaddingHorizontal = 20.0;
+  final double _titleHeightReserved = 20.0;
+  final double _pageNumberHeightReserved = 30.0;
 
   @override
   void initState() {
@@ -66,123 +76,184 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
-  void _paginate(BoxConstraints constraints, double fontSize, bool useTwoColumns) async {
-    if (_fullContent.isEmpty || _isPaging) return;
-    if (constraints.maxWidth <= 0 || constraints.maxHeight <= 0) return;
+  // 🔥 统一的样式配置（显示和计算必须完全一致）
+  TextStyle _getTextStyle(double fontSize) {
+    return TextStyle(
+      fontSize: fontSize,
+      height: 1.6, // 统一行高
+      color: Colors.black87,
+      fontFamily: 'Roboto',
+      locale: const Locale('zh', 'CN'),
+    );
+  }
 
-    _isPaging = true;
+  // 🔥 强制行高支架（防止半截字的核心）
+  StrutStyle _getStrutStyle(double fontSize) {
+    return StrutStyle(
+      fontSize: fontSize,
+      height: 1.6,
+      forceStrutHeight: true,
+    );
+  }
 
-    double paddingHorizontal = 32.0;
-    double paddingVertical = 60.0;
-    double pageWidth = constraints.maxWidth - paddingHorizontal;
-    double pageHeight = constraints.maxHeight - paddingVertical;
+  // 🔥 单线程排版方法
+  // 这里的 async 只是为了让 UI 有机会刷新 Loading 状态
+  Future<void> _paginate(BoxConstraints constraints, double fontSize, bool useTwoColumns) async {
+    if (_fullContent.isEmpty) return;
 
-    if (pageWidth <= 0 || pageHeight <= 0) {
-      _isPaging = false;
-      return;
-    }
+    // 简单的参数检查
+    if (constraints.maxWidth < 50 || constraints.maxHeight < 50) return;
 
-    if (useTwoColumns) {
-      pageWidth = (pageWidth - 32) / 2;
-    }
+    // 显示“正在排版”
+    setState(() => _isPaging = true);
 
-    final textStyle = TextStyle(fontSize: fontSize, height: 1.5, color: Colors.black87);
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    // 让 UI 线程喘口气，把 Loading 显示出来后再开始计算
+    await Future.delayed(const Duration(milliseconds: 50));
 
-    List<String> tempPages = [];
-    int startOffset = 0;
+    try {
+      // 1. 计算可用空间
+      double topReserved = _displayPaddingVertical + _titleHeightReserved;
+      double bottomReserved = _displayPaddingVertical + _pageNumberHeightReserved;
+      if (useTwoColumns) bottomReserved += 20.0; // 双页模式底部多留点空
 
-    while (startOffset < _fullContent.length) {
-      final remainingText = _fullContent.substring(startOffset);
-      textPainter.text = TextSpan(text: remainingText, style: textStyle);
-      textPainter.layout(maxWidth: pageWidth);
+      double rawHeight = constraints.maxHeight - topReserved - bottomReserved;
+      double pageWidth = constraints.maxWidth - (_displayPaddingHorizontal * 2);
 
-      final fitLength = textPainter.getPositionForOffset(Offset(pageWidth, pageHeight)).offset;
-
-      if (fitLength == 0) {
-        if (remainingText.isNotEmpty) tempPages.add(remainingText);
-        break;
+      if (useTwoColumns) {
+        pageWidth = (pageWidth - 32) / 2;
       }
 
-      final globalEndOffset = startOffset + fitLength;
-      tempPages.add(_fullContent.substring(startOffset, globalEndOffset));
-      startOffset = globalEndOffset;
-    }
+      // 2. 准备画笔
+      final textStyle = _getTextStyle(fontSize);
+      final strutStyle = _getStrutStyle(fontSize);
+      final textPainter = TextPainter(
+        textDirection: TextDirection.ltr,
+        locale: const Locale('zh', 'CN'),
+        strutStyle: strutStyle, // 计算时带上支架
+      );
 
-    if (mounted) {
-      setState(() {
-        _pages = tempPages;
-        _isPaging = false;
-        _pageFlipKey = UniqueKey();
-        // 🔥 新增：重置页码为0
-        _currentIndex = 0;
-      });
+      // 3. 计算“一行字”的高度
+      textPainter.text = TextSpan(text: "测试", style: textStyle);
+      textPainter.layout(maxWidth: pageWidth);
+      double singleLineHeight = textPainter.height;
+      if (singleLineHeight <= 0) singleLineHeight = fontSize * 1.6;
+
+      // 4. 计算一页能放多少行 (向下取整)
+      int maxLines = (rawHeight / singleLineHeight).floor();
+      // 安全减行：双页模式减2行，单页减1行
+      maxLines -= (useTwoColumns ? 2 : 1);
+      if (maxLines < 1) maxLines = 1;
+
+      // 5. 算出“完美页高”
+      double exactPageHeight = maxLines * singleLineHeight;
+
+      // 6. 循环截取内容
+      List<String> tempPages = [];
+      int startOffset = 0;
+      int contentLength = _fullContent.length;
+
+      while (startOffset < contentLength) {
+        // 每次取一部分内容来测量（性能优化）
+        int endEstimate = startOffset + 1000;
+        if (endEstimate > contentLength) endEstimate = contentLength;
+
+        String chunk = _fullContent.substring(startOffset, endEstimate);
+
+        textPainter.text = TextSpan(text: chunk, style: textStyle);
+        textPainter.strutStyle = strutStyle;
+        textPainter.layout(maxWidth: pageWidth);
+
+        // 找截断点
+        final endPos = textPainter.getPositionForOffset(Offset(pageWidth, exactPageHeight));
+        int fitLength = endPos.offset;
+
+        // 死循环保护：如果算出来是0，强行+1
+        if (fitLength <= 0) fitLength = 1;
+
+        // 边界修正
+        if (startOffset + fitLength > contentLength) {
+          fitLength = contentLength - startOffset;
+        }
+
+        tempPages.add(_fullContent.substring(startOffset, startOffset + fitLength));
+        startOffset += fitLength;
+      }
+
+      if (mounted) {
+        setState(() {
+          _pages = tempPages;
+          _isPaging = false; // 排版结束
+          _pageFlipKey = UniqueKey();
+
+          // 修正页码越界
+          if (_currentIndex >= _pages.length) {
+            _currentIndex = _pages.isNotEmpty ? _pages.length - 1 : 0;
+          }
+        });
+      }
+    } catch (e) {
+      print("排版出错: $e");
+      if (mounted) {
+        setState(() {
+          _isPaging = false;
+          _pages = [_fullContent]; // 出错就显示全文，至少能看
+        });
+      }
     }
   }
 
   Widget _buildPageContent(String content, double fontSize) {
     return Text(
       content,
-      style: TextStyle(fontSize: fontSize, height: 1.5, color: Colors.black87),
+      style: _getTextStyle(fontSize),
+      strutStyle: _getStrutStyle(fontSize), // 显示时也要带支架
       textAlign: TextAlign.justify,
     );
   }
 
-  List<Widget> _buildAllPages(double fontSize, bool useTwoColumns, double screenWidth) {
+  List<Widget> _buildAllPages(double fontSize, bool useTwoColumns) {
     List<Widget> widgetPages = [];
-
     final pageDecoration = BoxDecoration(
       color: const Color(0xFFF5F5DC),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(0.05),
-          blurRadius: 5,
-          spreadRadius: 1,
-        )
-      ],
+      boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 5)],
+    );
+
+    final contentPadding = EdgeInsets.only(
+      left: _displayPaddingHorizontal,
+      right: _displayPaddingHorizontal,
+      top: _displayPaddingVertical + _titleHeightReserved,
+      bottom: _displayPaddingVertical + _pageNumberHeightReserved,
     );
 
     if (useTwoColumns) {
       for (int i = 0; i < _pages.length; i += 2) {
-        String leftContent = _pages[i];
-        String rightContent = (i + 1 < _pages.length) ? _pages[i + 1] : "";
-
+        String left = _pages[i];
+        String right = (i + 1 < _pages.length) ? _pages[i + 1] : "";
         widgetPages.add(Container(
           decoration: pageDecoration,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+          padding: contentPadding,
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: _buildPageContent(leftContent, fontSize)),
-              Container(
-                width: 1,
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Colors.black12, Colors.transparent],
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                    )),
-              ),
-              Expanded(child: rightContent.isNotEmpty ? _buildPageContent(rightContent, fontSize) : Container()),
+              Expanded(child: _buildPageContent(left, fontSize)),
+              Container(width: 1, color: Colors.black12, margin: const EdgeInsets.symmetric(horizontal: 16)),
+              Expanded(child: right.isNotEmpty ? _buildPageContent(right, fontSize) : Container()),
             ],
           ),
         ));
       }
     } else {
-      double horizontalPadding = 20;
-      if (screenWidth > 600) horizontalPadding = screenWidth * 0.15;
-
-      for (var pageText in _pages) {
+      for (var txt in _pages) {
         widgetPages.add(Container(
           decoration: pageDecoration,
-          padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: 40),
-          child: _buildPageContent(pageText, fontSize),
+          padding: contentPadding,
+          alignment: Alignment.topLeft,
+          child: _buildPageContent(txt, fontSize),
         ));
       }
     }
 
     if (widgetPages.isEmpty) return [Container(decoration: pageDecoration)];
-
     return widgetPages;
   }
 
@@ -227,9 +298,7 @@ class _ReaderPageState extends State<ReaderPage> {
                     subtitle: const Text("模拟书本左右分页显示"),
                     secondary: const Icon(Icons.menu_book, color: Colors.grey),
                     value: useTwoColumns,
-                    onChanged: (val) {
-                      ReaderSettings.useTwoColumns = val;
-                    },
+                    onChanged: (val) => ReaderSettings.useTwoColumns = val,
                   ),
                 ],
               ),
@@ -244,82 +313,82 @@ class _ReaderPageState extends State<ReaderPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFE0DCC5),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SafeArea(
+      body: SafeArea(
         child: ValueListenableBuilder<Box>(
           valueListenable: ReaderSettings.listenable(),
           builder: (context, box, child) {
             double fontSize = box.get('fontSize', defaultValue: 18.0);
             bool useTwoColumns = box.get('useTwoColumns', defaultValue: false);
-            double screenWidth = MediaQuery.of(context).size.width;
 
             return LayoutBuilder(
               builder: (context, constraints) {
-                bool configChanged = fontSize != _lastFontSize || useTwoColumns != _lastUseTwoColumns;
+                // 检查是否需要重新排版
+                // 条件：内容已加载 + (配置变了 OR 屏幕大小变了 OR 还没排过版)
+                bool needRepaginate = false;
+                if (!_isLoading && _fullContent.isNotEmpty && !_isPaging) {
+                  if (_pages.isEmpty ||
+                      fontSize != _lastFontSize ||
+                      useTwoColumns != _lastUseTwoColumns ||
+                      constraints.biggest != _lastSize) {
+                    needRepaginate = true;
+                  }
+                }
 
-                if (!_isLoading && _fullContent.isNotEmpty && !_isPaging && (_pages.isEmpty || configChanged)) {
+                if (needRepaginate) {
+                  // 更新缓存
                   _lastFontSize = fontSize;
                   _lastUseTwoColumns = useTwoColumns;
+                  _lastSize = constraints.biggest;
 
-                  Future.microtask(() {
-                    if (mounted && configChanged) {
-                      setState(() {
-                        _pages = [];
-                      });
-                    }
-                    _paginate(constraints, fontSize, useTwoColumns);
-                  });
+                  // 触发排版 (使用 microtask 避免 setState 冲突)
+                  Future.microtask(() => _paginate(constraints, fontSize, useTwoColumns));
                 }
 
-                if (_isLoading || (_pages.isEmpty && _fullContent.isNotEmpty)) {
-                  return const Center(child: CircularProgressIndicator());
+                // 如果正在加载或正在排版
+                if (_isLoading || _isPaging || _pages.isEmpty) {
+                  return const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 10),
+                        Text("正在处理...", style: TextStyle(color: Colors.brown)),
+                      ],
+                    ),
+                  );
                 }
 
-                final widgetPages = _buildAllPages(fontSize, useTwoColumns, screenWidth);
-
-                // 🔥 获取总页数（屏幕数）
+                final widgetPages = _buildAllPages(fontSize, useTwoColumns);
                 int totalScreens = widgetPages.length;
 
                 return Stack(
                   children: [
-                    // 1. 翻页组件
                     PageFlipWidget(
                       key: _pageFlipKey,
                       backgroundColor: const Color(0xFFE0DCC5),
                       children: widgetPages,
-                      // 🔥 新增：监听翻页
+                      initialIndex: _currentIndex,
                       onPageFlip: (int pageIndex) {
-                        setState(() {
-                          _currentIndex = pageIndex;
+                        // 简单的微任务回调
+                        Future.microtask(() {
+                          if (mounted) setState(() => _currentIndex = pageIndex);
                         });
                       },
                     ),
 
-                    // 2. 顶部标题
                     Positioned(
-                      top: 5,
-                      left: 50,
-                      child: Text(
-                        widget.chapter.title,
-                        style: const TextStyle(color: Colors.grey, fontSize: 12),
-                      ),
+                        top: 5, left: 50,
+                        child: Text(widget.chapter.title, style: const TextStyle(color: Colors.grey, fontSize: 12))
                     ),
-
-                    // 3. 返回按钮
                     Positioned(
-                      top: 0,
-                      left: 0,
+                      top: 0, left: 0,
                       child: IconButton(
                         icon: const Icon(Icons.arrow_back, color: Colors.brown),
                         onPressed: () => Navigator.pop(context),
                       ),
                     ),
-
-                    // 4. 设置按钮
                     Positioned(
-                      bottom: 30,
-                      right: 20,
+                      bottom: 30, right: 20,
                       child: FloatingActionButton(
                         mini: true,
                         backgroundColor: Colors.brown.withOpacity(0.8),
@@ -327,18 +396,10 @@ class _ReaderPageState extends State<ReaderPage> {
                         onPressed: _showSettingsModal,
                       ),
                     ),
-
-                    // 🔥 5. 新增：页码显示
                     Positioned(
-                      bottom: 10,
-                      right: 25,
-                      child: Text(
-                        "${_currentIndex + 1}/$totalScreens",
-                        style: TextStyle(
-                          color: Colors.brown.withOpacity(0.6),
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      bottom: 10, right: 25,
+                      child: Text("${_currentIndex + 1}/$totalScreens",
+                          style: TextStyle(color: Colors.brown.withOpacity(0.6), fontSize: 12, fontWeight: FontWeight.bold)
                       ),
                     ),
                   ],
